@@ -4,9 +4,9 @@ from sqlalchemy import select,func
 from fastapi import HTTPException
 from redis import Redis
 from src.config.settings import REDIS_URL
-from src.models import AlignmentRun
+from src.models import AlignmentRun,Template
 from src.services.collection_service import get_collection
-from src.services.template_service import get_template
+from src.services.template_service import active_version
 from src.services.specimen_service import list_specimens
 from src.services.deformation import analyze_alignment
 from src.constants.enums import RunStatus
@@ -18,10 +18,18 @@ def get_run(db,id):
     return r
 
 def create_run(db,data):
-    c=get_collection(db,data.collection_id);t=get_template(db,c.template_id)
+    c=get_collection(db,data.collection_id);v=active_version(db,c.template_id)
     if db.scalar(select(AlignmentRun).where(AlignmentRun.name==data.name)):raise HTTPException(409,'研究名称重复')
     if db.scalar(select(func.count()).select_from(AlignmentRun).where(AlignmentRun.status.in_(['queued','running'])))>=3:raise HTTPException(429,'已有3项活动任务，请等待')
-    snapshot={'collection':{k:getattr(c,k) for k in ('id','code','name','protocol','source_file','template_id')},'template':{k:getattr(t,k) for k in ('id','code','name','labels','points','convention')},'specimens':[{k:getattr(s,k) for k in ('id','code','name','points','source_note')} for s in list_specimens(db,c.id)]}
+    # Freeze the WHOLE active template version (old or new) and its specimens.
+    # A migration in flight never produces a half-version snapshot: until switch
+    # every specimen still matches the active version's label order.
+    t=db.get(Template,c.template_id)
+    # Freeze the WHOLE active template version (old or new) and its specimens.
+    # A migration in flight never produces a half-version snapshot: until the
+    # switch every specimen still matches the active version's label order.
+    template_snapshot={'id':t.id,'code':t.code,'name':t.name,'labels':v.labels,'points':v.points,'convention':v.convention,'version':v.version,'template_version_id':v.id}
+    snapshot={'collection':{k:getattr(c,k) for k in ('id','code','name','protocol','source_file','template_id')},'template':template_snapshot,'specimens':[{k:getattr(s,k) for k in ('id','code','name','points','source_note','template_version','revision')} for s in list_specimens(db,c.id)]}
     r=AlignmentRun(**data.model_dump(),snapshot=snapshot,status=RunStatus.QUEUED);db.add(r);db.commit()
     try:redis.lpush('shapes:runs',str(r.id))
     except Exception:pass

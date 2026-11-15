@@ -17,4 +17,16 @@ class TemplateInput(BaseModel):
         return self
 class TemplateOut(TemplateInput):
     id:int
+    current_version:int=1
+    model_config=ConfigDict(from_attributes=True)
+class TemplateVersionOut(BaseModel):
+    id:int
+    template_id:int
+    version:int
+    labels:list[str]
+    points:Outline
+    convention:str
+    is_active:bool
+    created_by:str
+    created_at:object=None
     model_config=ConfigDict(from_attributes=True)

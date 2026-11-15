@@ -8,9 +8,9 @@
 
 | 角色 | 页面 | 权限 | 典型动作 |
 |---|---|---|---|
-| admin 复验负责人 | 六页全部 | 写入、排队、说明、批准/退回、导出 | 批注角点与制造约束复验 |
-| analyst 形状分析员 | 六页全部 | 集合/模板/裁片维护、排队、提出说明、导出已批准说明 | 比较原始轮廓、配准及模态 |
-| viewer 纸模观察员 | 六页全部 | 只读与已批准CSV下载，写入/审批403 | 阅读同源口径和分发依据 |
+| admin 复验负责人 | 七页全部 | 写入、排队、说明、批准/退回、导出、发布改版 | 批注角点与制造约束复验、激活模板版本切换 |
+| analyst 形状分析员 | 七页全部 | 集合/模板/裁片维护、改版迁移、排队、提出说明、导出已批准说明 | 比较原始轮廓、配准及模态、逐点映射并追齐冲突 |
+| viewer 纸模观察员 | 七页全部 | 只读与已批准CSV下载，写入/审批403 | 阅读同源口径、版本时间线与分发依据 |
 
 账号：`admin@tinglan.local`、`analyst@tinglan.local`、`viewer@tinglan.local`；共同密码 `Tinglan2026!`。
 
@@ -26,6 +26,20 @@
 8. 10:00 沈汀用admin留批注并同意复验；叶禾用viewer下载 `inspection-note-<id>.csv`，含审批、配准摘要、30份轮廓的原始/对齐/重建坐标、两种均值与模态端点。新点需新建冻结研究，不回写历史结果。
 
 数值来自固定seed输入的真实API/worker计算；镜像集合最大GPA距离约1.03168，仍保留差异。全同形校验有浮点残差约2.08e−15且没有假模态。
+
+## 共享模板改版与逐点迁移
+
+同源模板的8个角点按数组位置与裁片坐标逐位对应，直接改标签会把坐标认错。系统以**不可变模板版本 + 逐点迁移**支持一次改版覆盖引用同一模板的多个集合（第七页「模板改版」）。
+
+- **版本不可变，单一生效**：`template_versions` 保存每个模板的全部版本，部分唯一索引保证每模板至多一个 `is_active`；`templates` 本身只保留自然键与名称/约定，标签/坐标的对应关系归版本所有。PUT `/templates/{id}` 改标签或参考坐标返回422，引导走迁移。
+- **逐点映射双射**：发布时提供 `{旧标签:新标签}`，服务校验8项无缺漏、无重复、恰好覆盖新版标签，预计算 `point_mapping`（`after[i]=before[point_mapping[i]]`），坐标随标签移动、数值不变；映射缺漏/重复在创建与激活两处都拒绝，绝不切换。
+- **预览不切换**：为每个受影响集合的每份裁片生成 `template_migration_items`，记录重排前后8×2坐标与裁片版本/修订令牌；draft 阶段录入、更正、排队研究均不受阻。
+- **完整旧版或新版**：研究冻结时取集合当前激活版本的完整模板与全部裁片，snapshot 标注 `version`；迁移未切换取完整旧版、切换后取完整新版，不存在半版本快照；历史 run、artifacts 与复验说明不回写。
+- **追齐与恢复**：裁片带 `template_version` 与单调 `revision` 双令牌。迁移期间任何更正都会让对应 item 变 `stale`，激活事务整体不切换并置 `conflict`；对单条 item rebase 按当前坐标重新生成预览后可重试。激活为可重入单事务（PG 行锁、SQLite 串行），中断后 worker 扫描 `in_progress` 恢复，条件更新保证不覆盖较新修订。
+- **并发互斥**：每模板至多一条非终态迁移（部分唯一索引 + 服务层校验），并发发布第二个返回409；同一模板永远只有一个 active 版本。
+- **过期保存拒绝**：前端裁片表单携带读取时的 `template_version`；切换后旧页面保存返回409并提示重载，前端自动刷新当前顺序后才可再编辑。
+- **进度与冲突可见**：第七页展示迁移进度（已重排/待切换/冲突）、逐点映射表、前后轮廓预览、冲突清单（记录/当前版本与修订号）、最终生效版本与时间线；`in_progress/conflict` 每2.5秒轮询。
+- 迁移经 Redis 队列 `shapes:migrations` 交单 worker，与 run 同构：Redis 仅唤醒，数据库是状态权威，唤醒失败仍周期扫描。取消（draft/conflict）不动任何裁片，目标版本保留为不可变历史。
 
 ## 启动
 
@@ -83,11 +97,11 @@ SHA256覆盖算法版本、完整冻结集合/模板/裁片、保留数和容差
 
 ## 代码与本地开发
 
-ShapeCollection、Template、ShapeSpecimen、AlignmentRun、InspectionNote各有独立model/schema/service/controller/route/API。collectionStore管理集合/基准、specimenStore管理原始点、researchStore管理任务/批注。六页为索引、来源、运行、结果、批注、留痕，登录另计；ShapeCanvas复用于索引/模板/配准/模态，同画布保持等比例。PageHeading/StatusBadge/ErrorNotice等共享，useTask/usePolling与format工具复用。宽表只局部滚动，grid使用minmax(0,1fr)/min-width:0；结果选择按真实加载数据同步。
+ShapeCollection、Template/TemplateVersion、ShapeSpecimen、TemplateMigration/TemplateMigrationItem、AlignmentRun、InspectionNote各有独立model/schema/service/controller/route/API。collectionStore管理集合/基准、specimenStore管理原始点（含版本/修订令牌）、researchStore管理任务/批注、migrationStore管理改版任务与逐点预览。七页为索引、来源、运行、结果、批注、模板改版、留痕，登录另计；ShapeCanvas复用于索引/模板/配准/模态/迁移前后预览，同画布保持等比例。PageHeading/StatusBadge/ErrorNotice等共享，useTask/usePolling与format工具复用。宽表只局部滚动，grid使用minmax(0,1fr)/min-width:0；结果选择按真实加载数据同步。
 
 目录为backend/src/{models,schemas,services,controllers,routes,config,constants,middlewares,utils}，数学services/{geometry,gpa,deformation}.py，seed与初始migrations；frontend/src/{api,stores,types,constants,components/common,hooks,pages,router,utils}。
 
-共享Role/RunStatus/NoteStatus在backend/src/constants/enums.py和frontend/src/constants/enums.ts，角色类型在frontend/src/types/domain.ts；RunStatus用于service/worker，NoteStatus用于schema/service，前端用于账户、状态及页面。
+共享Role/RunStatus/NoteStatus/MigrationStatus在backend/src/constants/enums.py和frontend/src/constants/enums.ts，角色类型在frontend/src/types/domain.ts；RunStatus用于service/worker，NoteStatus用于schema/service，MigrationStatus用于迁移服务与页面，前端用于账户、状态及页面。
 
 ```bash
 docker compose up -d db redis
@@ -106,4 +120,4 @@ npm ci
 npm run dev -- --port 18234
 ```
 
-本地worker需可写/artifacts，推荐Compose卷。metadata.create_all只建缺表，初始DDL供审阅，没有生产版本迁移工具。Google Fonts DM Sans/Noto Sans SC/Noto Serif SC，离线回退serif。来源文件名为溯源元数据；没有任意CSV自动导入或自动同源点识别，新增模板可用API，UI核对/修改已有基准。测试/截图/已知差异在独立test-artifacts/gb-0030。收尾docker compose down -v --remove-orphans删除本题数据/结果卷。MIT License。
+本地worker需可写/artifacts，推荐Compose卷。metadata.create_all只建缺表，初始DDL（001_initial.sql、002_template_versions.sql）供审阅，没有生产版本迁移工具；lifespan 幂等执行首版引导，为旧模板补 active v1 并把裁片令牌置1。Google Fonts DM Sans/Noto Sans SC/Noto Serif SC，离线回退serif。来源文件名为溯源元数据；没有任意CSV自动导入或自动同源点识别，新增模板可用API，UI核对/修改已有基准。后端 pytest（backend/tests，SQLite 内存式文件库 + TestClient，FakeRedis）覆盖引导、映射校验、完整迁移、期间更正冲突与追齐、中断恢复、并发互斥、过期409、研究冻结与权限；前端 `npm run build` 做 tsc 类型检查与构建。测试/截图/已知差异在独立test-artifacts/gb-0030。收尾docker compose down -v --remove-orphans删除本题数据/结果卷。MIT License。

@@ -2,7 +2,7 @@
 import numpy as np
 from sqlalchemy import select
 from src.config.database import Base,engine,Session
-from src.models import User,Template,ShapeCollection,ShapeSpecimen
+from src.models import User,Template,TemplateVersion,ShapeCollection,ShapeSpecimen
 from src.utils.security import hash_password
 
 def seed():
@@ -15,7 +15,7 @@ def seed():
             if not db.scalar(select(User).where(User.email==email)):db.add(User(email=email,name=name,role=role,password_hash=hash_password('Tinglan2026!')))
         for j,(code,name) in enumerate([('TL-DRIFT','折角展开 · 正常形变集合'),('TL-MIRROR','镜像混入 · 方向核对集合'),('TL-DEGEN','退化角点 · 失败边界集合')]):
             tcode='TL-8-'+str(j+1);t=db.scalar(select(Template).where(Template.code==tcode))
-            if not t:t=Template(code=tcode,name='八角点同源基准 '+str(j+1),labels=['L'+str(i+1) for i in range(8)],points=(base@rotation(j*.3)).tolist(),convention='按裁片边界顺序固定L1–L8；不重排、不循环平移、不允许反射；单位mm。');db.add(t);db.flush()
+            if not t:t=Template(code=tcode,name='八角点同源基准 '+str(j+1),labels=['L'+str(i+1) for i in range(8)],points=(base@rotation(j*.3)).tolist(),convention='按裁片边界顺序固定L1–L8；不重排、不循环平移、不允许反射；单位mm。');db.add(t);db.flush();db.add(TemplateVersion(template_id=t.id,version=1,labels=t.labels,points=t.points,convention=t.convention,is_active=True,created_by='seed-demo'))
             collection=db.scalar(select(ShapeCollection).where(ShapeCollection.code==code))
             if not collection:collection=ShapeCollection(code=code,name=name,template_id=t.id,protocol='独立裁片的同源角点由上游核对；仅去平移、正尺度与旋转，镜像保留为差异。',source_file=code+'_8landmarks_mm.csv');db.add(collection);db.flush()
             for i in range(30):

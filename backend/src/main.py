@@ -8,13 +8,18 @@ from redis import Redis
 from src.config.database import Base,engine
 from src.config.settings import SEED_DEMO,REDIS_URL
 from src import models
-from src.routes import auth,collections,templates,specimens,runs,notes,audit
+from src.routes import auth,collections,templates,specimens,runs,notes,audit,migrations
 from src.middlewares.audit import AuditMiddleware
 from src.middlewares.errors import ErrorMiddleware
 from src.middlewares.rate_limit import RateLimitMiddleware
 @asynccontextmanager
 async def lifespan(app):
     Base.metadata.create_all(engine)
+    try:
+        from src.config.database import Session
+        from src.services.template_service import bootstrap_versions
+        with Session() as db:bootstrap_versions(db)
+    except Exception:logging.exception('template version bootstrap failed')
     if SEED_DEMO:
         try:
             from scripts.seed_demo import seed
@@ -26,7 +31,7 @@ app=FastAPI(title='汀澜纸模裁片形状册',lifespan=lifespan)
 async def validation_error(request,exc):
     return JSONResponse(status_code=422,content={'detail':[{'loc':list(e['loc']),'msg':e['msg']} for e in exc.errors()]})
 app.add_middleware(AuditMiddleware);app.add_middleware(RateLimitMiddleware);app.add_middleware(ErrorMiddleware)
-for mod in (auth,collections,templates,specimens,runs,notes,audit):app.include_router(mod.router)
+for mod in (auth,collections,templates,specimens,runs,notes,audit,migrations):app.include_router(mod.router)
 @app.get('/health')
 def health():
     with engine.connect() as conn:conn.execute(text('SELECT 1'))

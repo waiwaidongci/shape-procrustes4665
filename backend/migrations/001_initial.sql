@@ -79,6 +79,8 @@ CREATE TABLE shape_specimens (
 	name VARCHAR(100) NOT NULL,
 	points JSON NOT NULL,
 	source_note VARCHAR(300) NOT NULL,
+	template_version INTEGER NOT NULL DEFAULT 1,
+	revision INTEGER NOT NULL DEFAULT 1,
 	PRIMARY KEY (id),
 	UNIQUE (collection_id, code),
 	FOREIGN KEY(collection_id) REFERENCES shape_collections (id)

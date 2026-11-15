@@ -10,4 +10,8 @@ class ShapeSpecimen(Base):
     name:Mapped[str]=mapped_column(String(100))
     points:Mapped[list]=mapped_column(JSON)
     source_note:Mapped[str]=mapped_column(String(300),default='')
+    template_version:Mapped[int]=mapped_column(default=1)
+    # Monotonic revision counter; bumps on every correction so a migration can
+    # detect same-version edits made during the migration window.
+    revision:Mapped[int]=mapped_column(default=1)
     __table_args__=(UniqueConstraint('collection_id','code'),)
